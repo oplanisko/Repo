@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Viacvrstvová mapka od Pištu</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.css" />
+  <!-- Leaflet Geoman CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.13.0/dist/leaflet-geoman.css" />
+
+  <style>
+    html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; }
+    .control-panel {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(235, 229, 229, 0.7);
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+      font-family: sans-serif;
+    }
+    .control-panel label {
+      display: block;
+      margin: 6px 0 4px;
+    }
+    .leaflet-popup-content-wrapper {
+      background: rgba(255, 255, 255, 0.5);
+      box-shadow: none;
+    }
+    .leaflet-popup-tip {
+      background: rgba(255, 255, 255, 0.5);
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+
+<!-- Control Panel -->
+<div class="control-panel">
+  <button id="legendBtn">🔣</button>
+  <button id="exportBBoxBtn">📦</button>
+  <button id="exportPinBtn">📍</button>
+  <button id="locateBtn">🎯</button>
+  <label>🌍 <input type="range" id="satOpacity" min="0" max="1" step="0.1" value="1"></label>
+  <label>🛣️ <input type="range" id="streetsOpacity" min="0" max="1" step="0.1" value="1"></label>
+  <label>🏔️ <input type="range" id="topoOpacity" min="0" max="1" step="0.1" value="1"></label>
+  <label>🗺️ <input type="range" id="osmOpacity" min="0" max="1" step="0.1" value="1"></label>
+  <label>🥾 <input type="range" id="SkOpacity" min="0" max="1" step="0.1" value="1"></label>
+  <label>🏕️ <input type="range" id="touristOpacity" min="0" max="1" step="0.1" value="1"></label>
+</div>
+
+<!-- JS -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script src="https://unpkg.com/leaflet-control-geocoder/dist/Control.Geocoder.js"></script>
+<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.13.0/dist/leaflet-geoman.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.geometryutil/0.9.3/leaflet.geometryutil.min.js"></script>
+
+<script>
+  const map = L.map('map').setView([48.6690, 19.6990], 7);
+  L.control.scale({ metric: true, imperial: false, position: 'bottomright' }).addTo(map);
+
+  const esriImagery = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }).addTo(map);
+  const esriStreets = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }).addTo(map);
+  const esriTopo = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }).addTo(map);
+  const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+  const freemapSkLayer = L.tileLayer('https://outdoor.tiles.freemap.sk/{z}/{x}/{y}@3x', { maxZoom: 18 }).addTo(map);
+  const touristMap = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  document.getElementById("satOpacity").oninput = e => esriImagery.setOpacity(e.target.value);
+  document.getElementById("streetsOpacity").oninput = e => esriStreets.setOpacity(e.target.value);
+  document.getElementById("topoOpacity").oninput = e => esriTopo.setOpacity(e.target.value);
+  document.getElementById("osmOpacity").oninput = e => osm.setOpacity(e.target.value);
+  document.getElementById("SkOpacity").oninput = e => freemapSkLayer.setOpacity(e.target.value);
+  document.getElementById("touristOpacity").oninput = e => touristMap.setOpacity(e.target.value);
+
+  const drawnItems = new L.FeatureGroup().addTo(map);
+
+  map.pm.addControls({
+    position: 'topleft',
+    drawCircle: false,
+    drawMarker: false,
+    drawPolygon: true,
+    drawPolyline: true,
+    drawRectangle: true,
+    drawCircleMarker: false,
+    editMode: true,
+    dragMode: true,
+    cutPolygon: false,
+    removalMode: true,
+    rotateMode: false
+  });
+
+  let currentPin = null;
+  let currentShape = null;
+
+  function showMeasurements(layer, shape) {
+    let content = "";
+
+    if (shape === "Polygon" || shape === "Rectangle") {
+      const area = L.GeometryUtil.geodesicArea(layer.getLatLngs()[0]);
+      content = `📐 Pľac: ${(area / 1000000).toFixed(10)} km²`;
+    } else if (shape === "Line") {
+      const latlngs = layer.getLatLngs();
+      let distance = 0;
+      for (let i = 0; i < latlngs.length - 1; i++) {
+        distance += latlngs[i].distanceTo(latlngs[i + 1]);
+      }
+
+      const coords = latlngs.map(pt => `${pt.lat},${pt.lng}`).join("|");
+      fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${coords}`)
+        .then(res => res.json())
+        .then(data => {
+          const elevations = data.results.map(r => r.elevation);
+          let ascend = 0, descend = 0;
+          for (let i = 0; i < elevations.length - 1; i++) {
+            const diff = elevations[i + 1] - elevations[i];
+            if (diff > 0) ascend += diff;
+            else descend -= diff;
+          }
+          content = `📏 Štreka: ${(distance / 1000).toFixed(2)} km<br>⬆️ Stúpanie: ${ascend.toFixed(0)} m<br>⬇️ Klesanie: ${descend.toFixed(0)} m`;
+          layer.bindPopup(content).openPopup();
+        })
+        .catch(() => {
+          content = `📏 Štreka: ${(distance / 1000).toFixed(2)} km<br>⚠️ Elevácia zlyhala`;
+          layer.bindPopup(content).openPopup();
+        });
+      return;
+    }
+
+    layer.bindPopup(content).openPopup();
+  }
+
+  map.on('pm:create', e => {
+    drawnItems.clearLayers();
+    const layer = e.layer;
+    currentShape = layer.toGeoJSON();
+    drawnItems.addLayer(layer);
+    showMeasurements(layer, e.shape);
+    layer.on("pm:edit", () => showMeasurements(layer, e.shape));
+  });
+
+  let marker;
+  map.on("click", function (e) {
+    if (marker) map.removeLayer(marker);
+    const { lat, lng } = e.latlng;
+
+    fetch(`https://api.open-elevation.com/api/v1/lookup?locations=${lat},${lng}`)
+      .then(res => res.json())
+      .then(data => {
+        const elevation = data.results[0].elevation;
+        const popupContent = `📍 ${e.latlng.toString()}<br>🗻 Výška: ${elevation} m`;
+        marker = L.marker(e.latlng).addTo(map).bindPopup(popupContent).openPopup();
+        currentPin = marker.toGeoJSON();
+        currentPin.properties.elevation = elevation;
+      })
+      .catch(() => {
+        const popupContent = `📍 ${e.latlng.toString()}<br>⚠️ Výška neznáma`;
+        marker = L.marker(e.latlng).addTo(map).bindPopup(popupContent).openPopup();
+        currentPin = marker.toGeoJSON();
+      });
+  });
+
+  document.getElementById("exportBBoxBtn").addEventListener("click", function () {
+    if (!currentShape) return alert("Označ polygon alebo štvorec.");
+
+    const name = prompt("Zadaj názov pre súbor:", "polygon.geojson");
+    if (!name) return;
+
+    const blob = new Blob([JSON.stringify(currentShape, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = name.endsWith(".geojson") ? name : name + ".geojson";
+    link.click();
+  });
+
+  document.getElementById("exportPinBtn").addEventListener("click", function () {
+    if (!currentPin) return alert("Označ miesto kliknutím.");
+    const name = prompt("Zadaj názov pre súbor:", "pin.geojson");
+    if (!name) return;
+
+    const blob = new Blob([JSON.stringify(currentPin, null, 2)], { type: "application/json" });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = name.endsWith(".geojson") ? name : name + ".geojson";
+    link.click();
+  });
+
+  document.getElementById("locateBtn").addEventListener("click", function () {
+    map.locate({ setView: true, maxZoom: 16, watch: false, enableHighAccuracy: true });
+  });
+
+  document.getElementById("legendBtn").addEventListener("click", function () {
+    window.open("https://www.freemap.sk/#show=legend", "_blank");
+  });
+
+  map.on('locationfound', function (e) {
+    L.circleMarker(e.latlng, {
+      radius: 6,
+      fillColor: '#136AEC',
+      color: '#FFF',
+      weight: 2,
+      opacity: 1,
+      fillOpacity: 1
+    }).addTo(map).bindPopup("🍺Vypi<br>🚬Zakur<br>-;+)").openPopup();
+  });
+
+  map.on('locationerror', function (e) {
+  console.warn("⚠️ GPS location could not be determined.");
+
+  // Show a popup in the center of the map
+  L.popup()
+    .setLatLng(map.getCenter())
+    .setContent("⚠️ Daco robi, aľe nejdze.")
+    .openOn(map);
+  });
+
+  L.Control.geocoder({ defaultMarkGeocode: true }).addTo(map);
+</script>
+</body>
+</html>
